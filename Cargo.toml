@@ -1,0 +1,12 @@
+[package]
+name = "blooming"
+version = "0.1.0"
+authors = ["Arjan Topolovec <arjan.top@gmail.com>"]
+
+[dependencies]
+bit-vec = "0.4"
+murmur3 = "0.3.0"
+byteorder = "0.5.3"
+
+[dev-dependencies]
+hamcrest = "0.1.0"
