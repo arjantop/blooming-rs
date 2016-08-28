@@ -1,4 +1,6 @@
 use std::mem::size_of;
+use std::usize;
+use std::cmp::{max, min};
 
 pub struct PackedVec {
     num_elem: usize,
@@ -32,18 +34,27 @@ impl PackedVec {
         let bucket_index = index / self.elements_per_bucket;
         let bucket = self.data[bucket_index];
         let element_index = index % self.elements_per_bucket;
-        let element_mask = (1 << self.element_size_bits) - 1; // handle 32
+        let element_mask = if self.element_size_bits == size_of::<usize>() * 8 {
+            usize::MAX
+        } else {
+            (1 << self.element_size_bits) - 1
+        };
         let shift_size = self.bucket_size_bits - self.element_size_bits * (element_index + 1);
         let element = bucket >> shift_size & element_mask;
         match f(element) {
             Some(new_element) => {
+                let new_value = Self::cap_value_to_valid_range(new_element, element_mask);
                 let clear_mask = !(element_mask << shift_size);
                 let cleared_bucket = bucket & clear_mask;
-                let new_bucket = cleared_bucket | (new_element << shift_size);
+                let new_bucket = cleared_bucket | (new_value << shift_size);
                 self.data[bucket_index] = new_bucket;
             }
             None => {}
         }
+    }
+
+    fn cap_value_to_valid_range(value: usize, max_value: usize) -> usize {
+        min(max(value, 0), max_value)
     }
 
     pub fn increment(&mut self, index: usize) {
@@ -54,7 +65,11 @@ impl PackedVec {
 
     pub fn decrement(&mut self, index: usize) {
         self.with_element(index, |element| {
-            Some(element - 1)
+            if element == 0 {
+                Some(0)
+            } else {
+                Some(element - 1)
+            }
         });
     }
 
@@ -81,13 +96,17 @@ mod tests {
 
     use self::test::Bencher;
 
-    use super::PackedVec;
+    use super::*;
     use hamcrest::*;
     use rand::{self, Rng};
 
+    fn new_default() -> PackedVec {
+        PackedVec::new(20, 4)
+    }
+
     #[test]
     fn value_at_index_is_incremented() {
-        let mut v = PackedVec::new(20, 4);
+        let mut v = new_default();
         assert_that(v.get(0), is(equal_to(Some(0))));
         v.increment(0);
         assert_that(v.get(0), is(equal_to(Some(1))));
@@ -98,8 +117,35 @@ mod tests {
     }
 
     #[test]
+    fn value_when_incrementing_is_capped_at_max_valid_value() {
+        let mut v = PackedVec::new(5, 2);
+        v.set(0, 2);
+        v.increment(0);
+        assert_that(v.get(0), is(equal_to(Some(3))));
+        v.increment(0);
+        assert_that(v.get(0), is(equal_to(Some(3))));
+    }
+
+    #[test]
+    fn value_when_decrementing_is_capped_at_zero() {
+        let mut v = PackedVec::new(5, 2);
+        v.set(0, 1);
+        v.decrement(0);
+        assert_that(v.get(0), is(equal_to(Some(0))));
+        v.decrement(0);
+        assert_that(v.get(0), is(equal_to(Some(0))));
+    }
+
+    #[test]
+    fn value_when_setting_is_capped_to_max_valid_value() {
+        let mut v = PackedVec::new(5, 2);
+        v.set(0, 100);
+        assert_that(v.get(0), is(equal_to(Some(3))));
+    }
+
+    #[test]
     fn value_at_index_is_decremented() {
-        let mut v = PackedVec::new(20, 4);
+        let mut v = new_default();
         v.set(0, 3);
         v.set(1, 1);
         v.decrement(0);
@@ -111,14 +157,40 @@ mod tests {
         assert_that(v.get(1), is(equal_to(Some(0))));
     }
 
+    #[test]
+    fn all_values_can_be_decremented_and_incremented() {
+        let mut v = new_default();
+        for i in 0..v.len() {
+            assert_that(v.get(i), is(equal_to(Some(0))));
+            v.increment(i);
+            assert_that(v.get(i), is(equal_to(Some(1))));
+            v.decrement(i);
+            assert_that(v.get(i), is(equal_to(Some(0))));
+        };
+    }
+
     #[bench]
-    fn increment_and_decrement(b: &mut Bencher) {
-        let mut v = PackedVec::new(20, 4);
+    fn increment_and_decrement_random(b: &mut Bencher) {
+        let mut v = PackedVec::new(5000, 2);
         let mut rng = rand::thread_rng();
+        let indexes: Vec<_> = rng.gen_iter::<usize>().map(|x| x % v.len()).take(1000).collect();
         b.iter(|| {
-            let index = rng.gen::<usize>() % v.len();
-            v.increment(index);
-            v.decrement(index);
+            for i in indexes.iter() {
+                v.increment(*i);
+                v.decrement(*i);
+            }
+        })
+    }
+
+    #[bench]
+    fn increment_and_decrement_sequential(b: &mut Bencher) {
+        let mut v = PackedVec::new(5000, 2);
+        let indexes: Vec<_> = (0..v.len()).cycle().take(1000).collect();
+        b.iter(|| {
+            for i in indexes.iter() {
+                v.increment(*i);
+                v.decrement(*i);
+            }
         })
     }
 }
