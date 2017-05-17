@@ -1,4 +1,4 @@
-// http://www.eecs.harvard.edu/~kirsch/pubs/bbbf/esa06.pdf
+// https://www.eecs.harvard.edu/~michaelm/postscripts/tr-02-05.pdf
 pub struct Hashes {
     base: u64,
     increment: u64,
